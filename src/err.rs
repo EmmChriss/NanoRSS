@@ -22,4 +22,10 @@ pub enum Error {
 
 	#[error("serialization error: {0}")]
 	RmpEncode(#[from] bincode::Error),
+
+	#[error("http client error: {0}")]
+	Reqwest(#[from] reqwest::Error),
+
+	#[error("error while parsing feed: {0}")]
+	FeedRS(#[from] feed_rs::parser::ParseFeedError),
 }

@@ -2,6 +2,7 @@
 
 mod db;
 mod err;
+mod fetch;
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
@@ -17,6 +18,7 @@ use axum::{
 use db::{Db, NewUser, User};
 pub use err::{Error, Result};
 
+use fetch::Fetcher;
 use tower_http::cors::CorsLayer;
 
 #[tokio::main]
@@ -29,13 +31,10 @@ async fn main() {
 
 struct App {
 	db: Db,
+	fetcher: Fetcher,
 }
 
 type AppState = Arc<tokio::sync::RwLock<App>>;
-
-async fn get_feeds() -> String {
-	todo!()
-}
 
 pub struct CurrentUser(User);
 
@@ -69,7 +68,7 @@ async fn auth<B>(
 	Ok(next.run(req).await)
 }
 
-async fn main2() -> Result<()> {
+async fn main2() -> anyhow::Result<()> {
 	// get environment, crash if missing
 	let addr = dotenvy::var("ADDRESS").unwrap_or("0.0.0.0".into());
 	let port = dotenvy::var("PORT").unwrap_or("8888".into());
@@ -103,8 +102,10 @@ async fn main2() -> Result<()> {
 		}
 	}
 
+	let fetcher = Fetcher::new()?;
+
 	// init state
-	let state = Arc::new(tokio::sync::RwLock::new(App { db }));
+	let state = Arc::new(tokio::sync::RwLock::new(App { db, fetcher }));
 
 	// init routes
 	let router = Router::new()
@@ -112,7 +113,10 @@ async fn main2() -> Result<()> {
 		.route("/api/v1/import", post(|| async { "".to_string() }))
 		.route("/api/v1/export", post(|| async { "".to_string() }))
 		.route("/api/v1/news", get(|| async { "".to_string() }))
-		.route("/api/v1/feeds", get(|| async { "".to_string() }))
+		.route(
+			"/api/v1/feeds",
+			get(|| async { "".to_string() }).post(|| async { "".to_string() }),
+		)
 		.route("/api/v1/articles", get(|| async { "".to_string() }))
 		.route("/api/v1/search", post(|| async { "".to_string() }))
 		.route("/api/v1/refresh", get(|| async { "".to_string() }))
