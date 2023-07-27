@@ -1,3 +1,5 @@
+use time::{OffsetDateTime, UtcOffset};
+
 use crate::{
 	db::{Article, Feed},
 	err::Result,
@@ -37,8 +39,14 @@ pub async fn fetch_feed(app: &App, feed: &Feed) -> Result<()> {
 }
 
 pub async fn fetch_all_feeds(app: &App) -> Result<()> {
-	for feed in Feed::get_all(&app)? {
-		fetch_feed(app, &feed).await?;
+	for mut feed in Feed::get_all(&app)? {
+		let result = fetch_feed(app, &feed).await;
+
+		// local time to UTC
+		feed.last_fetch_time = OffsetDateTime::now_local()?.to_offset(UtcOffset::UTC);
+		feed.last_error = result.err().map(|e| format!("{}", e));
+
+		feed.insert(app)?;
 	}
 
 	Ok(())

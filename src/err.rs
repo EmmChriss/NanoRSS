@@ -39,11 +39,14 @@ pub enum Error {
 	#[error("error while parsing base64 string: {0}")]
 	Base64(#[from] base64::DecodeError),
 
-	#[error("error parsing opml")]
+	#[error("error parsing opml: {0}")]
 	Opml(#[from] opml::Error),
 
-	#[error("error parsing url")]
+	#[error("error parsing url: {0}")]
 	Url(#[from] url::ParseError),
+
+	#[error("error getting local timezone: {0}")]
+	Timezone(#[from] time::error::IndeterminateOffset),
 }
 
 impl IntoResponse for Error {

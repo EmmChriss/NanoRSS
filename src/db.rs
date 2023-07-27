@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use url::Url;
 
 use crate::{App, Error, Result};
@@ -67,15 +68,17 @@ pub struct NewFeed {
 
 impl NewFeed {
 	pub async fn insert(self, app: &App) -> Result<()> {
-		let feed = Feed {
+		Feed {
 			id: app.db.generate_id()?,
 			url: self.url,
 			name: self.name.unwrap_or_default(),
 			scraper: self.scraper,
-		};
 
-		app.feeds
-			.insert(bincode::serialize(&feed.id)?, bincode::serialize(&feed)?)?;
+			last_fetch_time: OffsetDateTime::UNIX_EPOCH,
+			last_error: None,
+		}
+		.insert(app)?;
+
 		Ok(())
 	}
 }
@@ -112,9 +115,18 @@ pub struct Feed {
 	pub url: url::Url,
 	pub name: String,
 	pub scraper: Option<ScraperConfig>,
+
+	pub last_fetch_time: OffsetDateTime,
+	pub last_error: Option<String>,
 }
 
 impl Feed {
+	pub fn insert(&self, app: &App) -> Result<()> {
+		app.feeds
+			.insert(bincode::serialize(&self.id)?, bincode::serialize(&self)?)?;
+		Ok(())
+	}
+
 	pub fn get_feed(app: &App, id: u64) -> Result<Option<Feed>> {
 		let maybe_feed = app.feeds.get(bincode::serialize(&id)?)?;
 
