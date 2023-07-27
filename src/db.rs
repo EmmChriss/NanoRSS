@@ -1,45 +1,7 @@
-use std::path::Path;
-
 use serde::{Deserialize, Serialize};
+use url::Url;
 
-use crate::{Error, Result};
-
-const TREE_USERS: &str = "users";
-const TREE_FEEDS: &str = "feeds";
-const TREE_ARTICLES: &str = "articles";
-
-pub struct Db {
-	db: sled::Db,
-	users: sled::Tree,
-	feeds: sled::Tree,
-	articles: sled::Tree,
-}
-
-impl Db {
-	pub fn create_or_open(path: impl AsRef<Path>) -> Result<Self> {
-		let db = sled::Config::default()
-			.path(path)
-			.flush_every_ms(Some(1000));
-
-		let db = if cfg!(debug_assertions) {
-			db.print_profile_on_drop(true)
-		} else {
-			db
-		};
-
-		let db = db.open()?;
-		let users = db.open_tree(TREE_USERS)?;
-		let feeds = db.open_tree(TREE_FEEDS)?;
-		let articles = db.open_tree(TREE_ARTICLES)?;
-
-		Ok(Db {
-			db,
-			users,
-			feeds,
-			articles,
-		})
-	}
-}
+use crate::{App, Error, Result};
 
 #[derive(Serialize, Deserialize)]
 pub struct NewUser {
@@ -48,7 +10,7 @@ pub struct NewUser {
 }
 
 impl NewUser {
-	pub fn insert(self, db: &Db) -> Result<User> {
+	pub fn insert(self, db: &App) -> Result<User> {
 		if db.users.contains_key(self.username.as_bytes())? {
 			return Err(Error::UsernameTaken);
 		}
@@ -66,14 +28,14 @@ impl NewUser {
 	}
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct User {
 	pub username: String,
 	pub pass_hash: String,
 }
 
 impl User {
-	fn get_user(db: &Db, username: &str) -> Result<Option<User>> {
+	fn get_user(db: &App, username: &str) -> Result<Option<User>> {
 		db.users
 			.get(username.as_bytes())?
 			.map(|bytes| bincode::deserialize(&bytes))
@@ -81,7 +43,7 @@ impl User {
 			.map_err(Into::into)
 	}
 
-	pub fn try_login(db: &Db, username: &str, password: &str) -> Result<User> {
+	pub fn try_login(db: &App, username: &str, password: &str) -> Result<User> {
 		let user = Self::get_user(db, username)?.ok_or(Error::UsernameNotFound)?;
 
 		// validate password
@@ -94,7 +56,158 @@ impl User {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Feed {}
+pub struct ScraperConfig {}
 
 #[derive(Serialize, Deserialize)]
-pub struct Article {}
+pub struct NewFeed {
+	pub url: url::Url,
+	pub name: Option<String>,
+	pub scraper: Option<ScraperConfig>,
+}
+
+impl NewFeed {
+	pub async fn insert(self, app: &App) -> Result<()> {
+		let feed = Feed {
+			id: app.db.generate_id()?,
+			url: self.url,
+			name: self.name.unwrap_or_default(),
+			scraper: self.scraper,
+		};
+
+		app.feeds
+			.insert(bincode::serialize(&feed.id)?, bincode::serialize(&feed)?)?;
+		Ok(())
+	}
+}
+
+#[derive(Deserialize)]
+pub struct PatchFeed {
+	pub id: u64,
+	pub url: Option<url::Url>,
+	pub name: Option<String>,
+	pub scraper: Option<Option<ScraperConfig>>,
+}
+
+impl PatchFeed {
+	pub fn apply(self, app: &App) -> Result<()> {
+		let mut feed = Feed::get_feed(app, self.id)?.ok_or(Error::NotFound("feed".into()))?;
+
+		if let Some(url) = self.url {
+			feed.url = url;
+		}
+		if let Some(name) = self.name {
+			feed.name = name;
+		}
+		if let Some(scraper) = self.scraper {
+			feed.scraper = scraper;
+		}
+
+		Ok(())
+	}
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Feed {
+	pub id: u64,
+	pub url: url::Url,
+	pub name: String,
+	pub scraper: Option<ScraperConfig>,
+}
+
+impl Feed {
+	pub fn get_feed(app: &App, id: u64) -> Result<Option<Feed>> {
+		let maybe_feed = app.feeds.get(bincode::serialize(&id)?)?;
+
+		let feed = if let Some(feed) = maybe_feed {
+			bincode::deserialize(&feed)?
+		} else {
+			None
+		};
+
+		Ok(feed)
+	}
+
+	pub fn get_all(app: &App) -> Result<Vec<Feed>> {
+		app.feeds
+			.iter()
+			.map(|item| {
+				item.map_err(Error::from)
+					.and_then(|(_, v)| bincode::deserialize(&v).map_err(Error::from))
+			})
+			.collect()
+	}
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Article {
+	pub id: String,
+	pub title: String,
+	pub summary: String,
+	pub content: String,
+}
+
+impl Article {
+	pub fn insert(&self, app: &App) -> Result<()> {
+		app.articles
+			.insert(self.id.as_bytes(), bincode::serialize(self)?)
+			.map(|_| ())
+			.map_err(Error::from)
+	}
+
+	pub fn get_all(app: &App) -> Result<Vec<Article>> {
+		app.articles
+			.iter()
+			.map(|item| {
+				item.map_err(Error::from)
+					.and_then(|(_, v)| bincode::deserialize(&v).map_err(Error::from))
+			})
+			.collect()
+	}
+}
+
+pub enum ImportOpts {
+	Opml(opml::OPML),
+}
+
+pub async fn import(app: &App, opts: ImportOpts) -> Result<()> {
+	match opts {
+		ImportOpts::Opml(opml) => {
+			fn walk_outlines(outline: opml::Outline, collector: &mut Vec<opml::Outline>) {
+				for outline in &outline.outlines {
+					walk_outlines(outline.clone(), collector);
+				}
+
+				collector.push(outline);
+			}
+
+			let mut vec = Vec::new();
+			for outline in opml.body.outlines {
+				walk_outlines(outline, &mut vec);
+			}
+
+			let is_feed = |o: &opml::Outline| o.xml_url.is_some();
+
+			for outline in vec {
+				if is_feed(&outline) {
+					NewFeed {
+						url: Url::parse(&outline.xml_url.unwrap_or_default())?,
+						name: Some(outline.text),
+						scraper: None,
+					}
+					.insert(app)
+					.await?;
+				}
+			}
+
+			Ok(())
+		}
+	}
+}
+
+pub enum ExportOpts {
+	Opml,
+}
+
+pub fn export(app: &App, opts: ExportOpts) -> Result<String> {
+	todo!()
+}

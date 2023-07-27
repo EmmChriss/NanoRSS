@@ -1,40 +1,45 @@
-use std::time::Duration;
+use crate::{
+	db::{Article, Feed},
+	err::Result,
+	App,
+};
 
-use crate::err::Result;
+// TODO: implement scraper
+pub async fn fetch_feed(app: &App, feed: &Feed) -> Result<()> {
+	let response = app
+		.client
+		.get(feed.url.clone())
+		.send()
+		.await?
+		.error_for_status()?
+		.bytes()
+		.await?;
 
-pub enum FetchConfig {
-	Feed,
-	Scrape { scraper_config: String },
-}
+	// NOTE: this might appear redundant, but Rust couldn't figure out the types otherwise
+	let response_byteslice: &[u8] = &response;
+	let parsed = feed_rs::parser::parse_with_uri(response_byteslice, Some(feed.url.as_str()))?;
 
-pub struct Fetcher {
-	client: reqwest::Client,
-}
-
-impl Fetcher {
-	pub fn new() -> Result<Self> {
-		let client = reqwest::ClientBuilder::new()
-			.timeout(Duration::from_secs(20))
-			.connect_timeout(Duration::from_secs(10))
-			.build()?;
-
-		Ok(Fetcher { client })
+	// insert new stuff
+	for entry in parsed.entries {
+		Article {
+			id: entry.id,
+			title: entry.title.map(|text| text.content).unwrap_or_default(),
+			summary: entry.summary.map(|text| text.content).unwrap_or_default(),
+			content: entry
+				.content
+				.map(|content| content.body.unwrap_or_default())
+				.unwrap_or_default(),
+		}
+		.insert(&app)?;
 	}
 
-	pub async fn fetch(&self, url: &str, cfg: FetchConfig) -> Result<()> {
-		let response = self
-			.client
-			.get(url)
-			.send()
-			.await?
-			.error_for_status()?
-			.bytes()
-			.await?;
+	Ok(())
+}
 
-		// NOTE: this might appear redundant, but Rust couldn't figure out the types otherwise
-		let response_byteslice: &[u8] = &response;
-		let parsed = feed_rs::parser::parse_with_uri(response_byteslice, None)?;
-
-		Ok(())
+pub async fn fetch_all_feeds(app: &App) -> Result<()> {
+	for feed in Feed::get_all(&app)? {
+		fetch_feed(app, &feed).await?;
 	}
+
+	Ok(())
 }

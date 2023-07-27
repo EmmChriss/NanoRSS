@@ -1,6 +1,10 @@
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
 	#[error("failed to determine nanorss directory")]
 	NoRootDir,
@@ -13,6 +17,9 @@ pub enum Error {
 
 	#[error("password incorrect")]
 	PasswordIncorrect,
+
+	#[error("{0} was not found")]
+	NotFound(String),
 
 	#[error("failed to hash password: {0}")]
 	Bcrypt(#[from] bcrypt::BcryptError),
@@ -28,4 +35,27 @@ pub enum Error {
 
 	#[error("error while parsing feed: {0}")]
 	FeedRS(#[from] feed_rs::parser::ParseFeedError),
+
+	#[error("error while parsing base64 string: {0}")]
+	Base64(#[from] base64::DecodeError),
+
+	#[error("error parsing opml")]
+	Opml(#[from] opml::Error),
+
+	#[error("error parsing url")]
+	Url(#[from] url::ParseError),
+}
+
+impl IntoResponse for Error {
+	fn into_response(self) -> axum::response::Response {
+		match self {
+			Error::UsernameTaken => {
+				(StatusCode::BAD_REQUEST, "Username already taken").into_response()
+			}
+			Error::UsernameNotFound | Error::PasswordIncorrect => {
+				(StatusCode::UNAUTHORIZED, "Username or password incorrect").into_response()
+			}
+			_ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", self)).into_response(),
+		}
+	}
 }
