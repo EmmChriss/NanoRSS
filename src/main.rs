@@ -14,11 +14,13 @@ use axum::{
 	routing::{any, get, post},
 	Json, Router,
 };
-
 use base64::Engine;
 use db::{Article, ExportOpts, Feed, NewFeed, NewUser, PatchFeed, User};
 pub use err::{Error, Result};
 
+use serde::Deserialize;
+use tantivy::{collector::TopDocs, query::QueryParser, schema::*};
+use tempfile::TempDir;
 use tower_http::cors::CorsLayer;
 
 #[tokio::main]
@@ -33,12 +35,70 @@ pub struct Config {
 	db_path: PathBuf,
 }
 
+pub struct Searcher {
+	// tantivy index schema
+	field_id: tantivy::schema::Field,
+	field_title: tantivy::schema::Field,
+	field_summary: tantivy::schema::Field,
+	field_content: tantivy::schema::Field,
+
+	// search setup
+	index_path: TempDir,
+	schema: tantivy::schema::Schema,
+	index: tantivy::Index,
+	index_writer: tokio::sync::Mutex<tantivy::IndexWriter>,
+	index_reader: tantivy::IndexReader,
+}
+
+#[derive(Deserialize)]
+pub struct SearchQuery {
+	text: String,
+	order_by: OrderBy,
+	order: Order,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Order {
+	Asc,
+	Desc,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrderBy {
+	Title,
+}
+
+impl Searcher {
+	pub fn search(&self, query_request: SearchQuery) -> Vec<Document> {
+		let searcher = self.index_reader.searcher();
+		let query_parser = QueryParser::for_index(
+			&self.index,
+			vec![self.field_title, self.field_summary, self.field_content],
+		);
+
+		let query = query_parser.parse_query(&query_request.text).unwrap();
+
+		let top_docs = searcher.search(&query, &TopDocs::with_limit(10)).unwrap();
+
+		let mut vec = Vec::new();
+		for (_score, doc_address) in top_docs {
+			let retrieved_doc = searcher.doc(doc_address).unwrap();
+			vec.push(retrieved_doc);
+		}
+
+		vec
+	}
+}
+
 pub struct App {
 	db: sled::Db,
 	users: sled::Tree,
 	feeds: sled::Tree,
 	articles: sled::Tree,
 	client: reqwest::Client,
+	searcher: Searcher,
 }
 
 impl App {
@@ -46,7 +106,7 @@ impl App {
 	const TREE_FEEDS: &str = "feeds";
 	const TREE_ARTICLES: &str = "articles";
 
-	pub fn new(cfg: &Config) -> Result<Self> {
+	pub fn new(cfg: &Config) -> Result<Arc<Self>> {
 		let db = sled::Config::default()
 			.path(&cfg.db_path)
 			.flush_every_ms(Some(1000));
@@ -67,13 +127,80 @@ impl App {
 			.connect_timeout(Duration::from_secs(10))
 			.build()?;
 
-		Ok(Self {
+		let index_path = TempDir::new()?;
+
+		let mut schema_builder = SchemaBuilder::new();
+		let field_id = schema_builder.add_text_field("id", TEXT | FAST | STORED);
+		let field_title = schema_builder.add_text_field("title", TEXT | FAST | STORED);
+		let field_summary = schema_builder.add_text_field("summary", TEXT | FAST | STORED);
+		let field_content = schema_builder.add_text_field("content", TEXT | FAST | STORED);
+
+		let schema = schema_builder.build();
+		let index = tantivy::Index::create_in_dir(&index_path, schema.clone())?;
+		let index_writer = index.writer(50_000_000)?;
+		let index_reader = index.reader()?;
+
+		let searcher = Searcher {
+			index_path,
+			field_id,
+			field_title,
+			field_summary,
+			field_content,
+			schema,
+			index,
+			index_reader,
+			index_writer: tokio::sync::Mutex::new(index_writer),
+		};
+
+		let app = Self {
 			db,
 			users,
 			feeds,
 			articles,
 			client,
-		})
+			searcher,
+		};
+
+		let arc = Arc::new(app);
+
+		{
+			let app = arc.clone();
+			tokio::spawn(async move {
+				let mut subscriber = app.articles.watch_prefix(b"");
+
+				while let Some(evt) = (&mut subscriber).await {
+					let index_writer = &mut app.searcher.index_writer.lock().await;
+					match evt {
+						sled::Event::Insert { key, value } => {
+							let key = String::from_utf8_lossy(&key);
+
+							// remove previous document
+							let term = Term::from_field_text(field_id, &key);
+							index_writer.delete_term(term);
+
+							// add current document
+							let article: Article = bincode::deserialize(&value)?;
+							let doc = article.create_doc(&app);
+							index_writer.add_document(doc)?;
+						}
+						sled::Event::Remove { key } => {
+							let key = String::from_utf8_lossy(&key);
+
+							let term = Term::from_field_text(field_id, &key);
+							index_writer.delete_term(term);
+						}
+					}
+
+					// commit changes
+					index_writer.prepare_commit()?;
+					index_writer.commit()?;
+				}
+
+				Ok::<(), Error>(())
+			});
+		}
+
+		Ok(arc)
 	}
 }
 
@@ -178,9 +305,6 @@ async fn main2() -> anyhow::Result<()> {
 	.insert(&app)
 	.await?;
 
-	// init state
-	let state: AppState = Arc::new(app);
-
 	// init routes
 	let router = Router::new()
 		.route("/api/v1/status", any(|| async { "OK".to_string() }))
@@ -191,10 +315,10 @@ async fn main2() -> anyhow::Result<()> {
 			get(get_feeds).post(post_feed).patch(patch_feed),
 		)
 		.route("/api/v1/articles", get(get_articles))
-		// .route("/api/v1/search", post(|| async { "".to_string() }))
+		.route("/api/v1/search", post(search))
 		.route("/api/v1/refresh", post(refresh))
-		.route_layer(axum::middleware::from_fn_with_state(state.clone(), auth))
-		.with_state(state.clone())
+		.route_layer(axum::middleware::from_fn_with_state(app.clone(), auth))
+		.with_state(app.clone())
 		.layer(CorsLayer::permissive());
 
 	let addr = SocketAddr::new(addr.parse().unwrap(), port.parse().unwrap());
@@ -236,4 +360,11 @@ async fn import(State(state): State<AppState>, body: String) -> Result<()> {
 
 async fn export(State(state): State<AppState>, Query(opts): Query<ExportOpts>) -> Result<String> {
 	db::export(&state, opts)
+}
+
+async fn search(
+	State(state): State<AppState>,
+	Query(query): Query<SearchQuery>,
+) -> impl axum::response::IntoResponse {
+	Json(state.searcher.search(query))
 }

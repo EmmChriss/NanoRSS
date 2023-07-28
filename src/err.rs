@@ -47,6 +47,12 @@ pub enum Error {
 
 	#[error("error getting local timezone: {0}")]
 	Timezone(#[from] time::error::IndeterminateOffset),
+
+	#[error("io error: {0}")]
+	Io(#[from] std::io::Error),
+
+	#[error("error in search engine: {0}")]
+	Tantivy(#[from] tantivy::TantivyError),
 }
 
 impl IntoResponse for Error {

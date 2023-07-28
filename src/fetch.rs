@@ -42,8 +42,13 @@ pub async fn fetch_all_feeds(app: &App) -> Result<()> {
 	for mut feed in Feed::get_all(&app)? {
 		let result = fetch_feed(app, &feed).await;
 
-		// local time to UTC
-		feed.last_fetch_time = OffsetDateTime::now_local()?.to_offset(UtcOffset::UTC);
+		// attempt to take local time with timezone
+		// fall back to just taking local datetime
+		let time = OffsetDateTime::now_local()
+			.map(|t| t.to_offset(UtcOffset::UTC))
+			.unwrap_or_else(|_| OffsetDateTime::now_utc());
+
+		feed.last_fetch_time = time;
 		feed.last_error = result.err().map(|e| format!("{}", e));
 
 		feed.insert(app)?;
