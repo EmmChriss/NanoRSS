@@ -177,6 +177,7 @@ impl Article {
 	}
 }
 
+#[non_exhaustive]
 pub enum ImportOpts {
 	Opml(opml::OPML),
 }
@@ -216,10 +217,23 @@ pub async fn import(app: &App, opts: ImportOpts) -> Result<()> {
 	}
 }
 
+#[derive(Deserialize, Debug)]
+#[serde(tag = "kind")]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ExportOpts {
 	Opml,
 }
 
 pub fn export(app: &App, opts: ExportOpts) -> Result<String> {
-	todo!()
+	match opts {
+		ExportOpts::Opml => {
+			let mut opml = opml::OPML::default();
+			for feed in Feed::get_all(app)? {
+				opml.add_feed(&feed.name, &feed.url.to_string());
+			}
+
+			opml.to_string().map_err(Error::from)
+		}
+	}
 }

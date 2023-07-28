@@ -7,7 +7,7 @@ mod fetch;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use axum::{
-	extract::State,
+	extract::{Query, State},
 	http::Request,
 	middleware::Next,
 	response::Response,
@@ -16,7 +16,7 @@ use axum::{
 };
 
 use base64::Engine;
-use db::{Article, Feed, NewFeed, NewUser, PatchFeed, User};
+use db::{Article, ExportOpts, Feed, NewFeed, NewUser, PatchFeed, User};
 pub use err::{Error, Result};
 
 use tower_http::cors::CorsLayer;
@@ -231,12 +231,9 @@ async fn get_articles(State(state): State<AppState>) -> Result<Json<Vec<Article>
 
 async fn import(State(state): State<AppState>, body: String) -> Result<()> {
 	let opml = opml::OPML::from_str(&body)?;
-
-	db::import(&state, db::ImportOpts::Opml(opml)).await?;
-
-	Ok(())
+	db::import(&state, db::ImportOpts::Opml(opml)).await
 }
 
-async fn export(State(state): State<AppState>) -> Result<String> {
-	db::export(&state, db::ExportOpts::Opml)
+async fn export(State(state): State<AppState>, Query(opts): Query<ExportOpts>) -> Result<String> {
+	db::export(&state, opts)
 }
