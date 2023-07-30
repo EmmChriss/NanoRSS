@@ -1,11 +1,14 @@
 #![forbid(unsafe_code)]
 
+mod app;
 mod db;
 mod err;
 mod fetch;
+mod search;
 
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
+use app::App;
 use axum::{
 	extract::{Query, State},
 	http::Request,
@@ -18,9 +21,7 @@ use base64::Engine;
 use db::{Article, ExportOpts, Feed, NewFeed, NewUser, PatchFeed, User};
 pub use err::{Error, Result};
 
-use serde::Deserialize;
-use tantivy::{collector::TopDocs, query::QueryParser, schema::*};
-use tempfile::TempDir;
+use search::SearchQuery;
 use tower_http::cors::CorsLayer;
 
 #[tokio::main]
@@ -28,179 +29,6 @@ async fn main() {
 	match main2().await {
 		Ok(_) => (),
 		Err(e) => eprintln!("{}", e),
-	}
-}
-
-pub struct Config {
-	db_path: PathBuf,
-}
-
-pub struct Searcher {
-	// tantivy index schema
-	field_id: tantivy::schema::Field,
-	field_title: tantivy::schema::Field,
-	field_summary: tantivy::schema::Field,
-	field_content: tantivy::schema::Field,
-
-	// search setup
-	index_path: TempDir,
-	schema: tantivy::schema::Schema,
-	index: tantivy::Index,
-	index_writer: tokio::sync::Mutex<tantivy::IndexWriter>,
-	index_reader: tantivy::IndexReader,
-}
-
-#[derive(Deserialize)]
-pub struct SearchQuery {
-	text: String,
-	order_by: OrderBy,
-	order: Order,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Order {
-	Asc,
-	Desc,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OrderBy {
-	Title,
-}
-
-impl Searcher {
-	pub fn search(&self, query_request: SearchQuery) -> Vec<Document> {
-		let searcher = self.index_reader.searcher();
-		let query_parser = QueryParser::for_index(
-			&self.index,
-			vec![self.field_title, self.field_summary, self.field_content],
-		);
-
-		let query = query_parser.parse_query(&query_request.text).unwrap();
-
-		let top_docs = searcher.search(&query, &TopDocs::with_limit(10)).unwrap();
-
-		let mut vec = Vec::new();
-		for (_score, doc_address) in top_docs {
-			let retrieved_doc = searcher.doc(doc_address).unwrap();
-			vec.push(retrieved_doc);
-		}
-
-		vec
-	}
-}
-
-pub struct App {
-	db: sled::Db,
-	users: sled::Tree,
-	feeds: sled::Tree,
-	articles: sled::Tree,
-	client: reqwest::Client,
-	searcher: Searcher,
-}
-
-impl App {
-	const TREE_USERS: &str = "users";
-	const TREE_FEEDS: &str = "feeds";
-	const TREE_ARTICLES: &str = "articles";
-
-	pub fn new(cfg: &Config) -> Result<Arc<Self>> {
-		let db = sled::Config::default()
-			.path(&cfg.db_path)
-			.flush_every_ms(Some(1000));
-
-		let db = if cfg!(debug_assertions) {
-			db.print_profile_on_drop(true)
-		} else {
-			db
-		};
-
-		let db = db.open()?;
-		let users = db.open_tree(Self::TREE_USERS)?;
-		let feeds = db.open_tree(Self::TREE_FEEDS)?;
-		let articles = db.open_tree(Self::TREE_ARTICLES)?;
-
-		let client = reqwest::ClientBuilder::new()
-			.timeout(Duration::from_secs(20))
-			.connect_timeout(Duration::from_secs(10))
-			.build()?;
-
-		let index_path = TempDir::new()?;
-
-		let mut schema_builder = SchemaBuilder::new();
-		let field_id = schema_builder.add_text_field("id", TEXT | FAST | STORED);
-		let field_title = schema_builder.add_text_field("title", TEXT | FAST | STORED);
-		let field_summary = schema_builder.add_text_field("summary", TEXT | FAST | STORED);
-		let field_content = schema_builder.add_text_field("content", TEXT | FAST | STORED);
-
-		let schema = schema_builder.build();
-		let index = tantivy::Index::create_in_dir(&index_path, schema.clone())?;
-		let index_writer = index.writer(50_000_000)?;
-		let index_reader = index.reader()?;
-
-		let searcher = Searcher {
-			index_path,
-			field_id,
-			field_title,
-			field_summary,
-			field_content,
-			schema,
-			index,
-			index_reader,
-			index_writer: tokio::sync::Mutex::new(index_writer),
-		};
-
-		let app = Self {
-			db,
-			users,
-			feeds,
-			articles,
-			client,
-			searcher,
-		};
-
-		let arc = Arc::new(app);
-
-		{
-			let app = arc.clone();
-			tokio::spawn(async move {
-				let mut subscriber = app.articles.watch_prefix(b"");
-
-				while let Some(evt) = (&mut subscriber).await {
-					let index_writer = &mut app.searcher.index_writer.lock().await;
-					match evt {
-						sled::Event::Insert { key, value } => {
-							let key = String::from_utf8_lossy(&key);
-
-							// remove previous document
-							let term = Term::from_field_text(field_id, &key);
-							index_writer.delete_term(term);
-
-							// add current document
-							let article: Article = bincode::deserialize(&value)?;
-							let doc = article.create_doc(&app);
-							index_writer.add_document(doc)?;
-						}
-						sled::Event::Remove { key } => {
-							let key = String::from_utf8_lossy(&key);
-
-							let term = Term::from_field_text(field_id, &key);
-							index_writer.delete_term(term);
-						}
-					}
-
-					// commit changes
-					index_writer.prepare_commit()?;
-					index_writer.commit()?;
-				}
-
-				Ok::<(), Error>(())
-			});
-		}
-
-		Ok(arc)
 	}
 }
 
@@ -267,12 +95,10 @@ async fn main2() -> anyhow::Result<()> {
 	env_logger::init();
 
 	// init and seed db
-	let cfg = Config {
+	let cfg = app::Config {
 		db_path: root.join("db.sled"),
 	};
 	let app = App::new(&cfg)?;
-	app.articles.clear().unwrap();
-	app.feeds.clear().unwrap();
 
 	match (username, password) {
 		(Ok(username), Ok(password)) => {
@@ -287,23 +113,6 @@ async fn main2() -> anyhow::Result<()> {
 			log::error!("both USER and PASSWD need to be set to create a user")
 		}
 	}
-
-	// insert some dummy feeds
-	db::NewFeed {
-		url: url::Url::parse("https://without.boats/blog/index.xml")?,
-		name: Some("Without Boats".into()),
-		scraper: None,
-	}
-	.insert(&app)
-	.await?;
-
-	db::NewFeed {
-		url: url::Url::parse("https://fasterthanli.me/index.xml")?,
-		name: Some("Faster Than Lime".into()),
-		scraper: None,
-	}
-	.insert(&app)
-	.await?;
 
 	// init routes
 	let router = Router::new()
@@ -365,6 +174,6 @@ async fn export(State(state): State<AppState>, Query(opts): Query<ExportOpts>) -
 async fn search(
 	State(state): State<AppState>,
 	Query(query): Query<SearchQuery>,
-) -> impl axum::response::IntoResponse {
-	Json(state.searcher.search(query))
+) -> Result<Json<Vec<tantivy::Document>>> {
+	state.searcher.search(query).map(Json)
 }
