@@ -1,13 +1,14 @@
 use time::{OffsetDateTime, UtcOffset};
 
 use crate::{
+	app::AppUserDb,
 	db::{Article, Feed},
 	err::Result,
 	App,
 };
 
 // TODO: implement scraper
-pub async fn fetch_feed(app: &App, feed: &Feed) -> Result<()> {
+pub async fn fetch_feed(app: &App, app_user: &AppUserDb, feed: &Feed) -> Result<()> {
 	let response = app
 		.client
 		.get(feed.url.clone())
@@ -32,15 +33,15 @@ pub async fn fetch_feed(app: &App, feed: &Feed) -> Result<()> {
 				.map(|content| content.body.unwrap_or_default())
 				.unwrap_or_default(),
 		}
-		.insert(&app)?;
+		.insert(app_user)?;
 	}
 
 	Ok(())
 }
 
-pub async fn fetch_all_feeds(app: &App) -> Result<()> {
-	for mut feed in Feed::get_all(&app)? {
-		let result = fetch_feed(app, &feed).await;
+pub async fn fetch_all_feeds(app: &App, app_user: &AppUserDb) -> Result<()> {
+	for mut feed in Feed::get_all(&app_user)? {
+		let result = fetch_feed(app, app_user, &feed).await;
 
 		// attempt to take local time with timezone
 		// fall back to just taking local datetime
@@ -51,7 +52,7 @@ pub async fn fetch_all_feeds(app: &App) -> Result<()> {
 		feed.last_fetch_time = time;
 		feed.last_error = result.err().map(|e| format!("{}", e));
 
-		feed.insert(app)?;
+		feed.insert(app_user)?;
 	}
 
 	Ok(())

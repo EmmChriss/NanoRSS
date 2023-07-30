@@ -1,7 +1,7 @@
 use crate::err::Result;
 
 use serde::Deserialize;
-use tantivy::{collector::TopDocs, query::QueryParser, Document};
+use tantivy::{collector::TopDocs, query::QueryParser, schema::*, Document};
 use tempfile::TempDir;
 
 pub struct Searcher {
@@ -36,6 +36,33 @@ pub enum Order {
 }
 
 impl Searcher {
+	pub fn new() -> Result<Self> {
+		let index_path = TempDir::new()?;
+
+		let mut schema_builder = SchemaBuilder::new();
+		let field_id = schema_builder.add_text_field("id", TEXT | FAST | STORED);
+		let field_title = schema_builder.add_text_field("title", TEXT | FAST | STORED);
+		let field_summary = schema_builder.add_text_field("summary", TEXT | FAST | STORED);
+		let field_content = schema_builder.add_text_field("content", TEXT | FAST | STORED);
+
+		let schema = schema_builder.build();
+		let index = tantivy::Index::create_in_dir(&index_path, schema.clone())?;
+		let index_writer = index.writer(50_000_000)?;
+		let index_reader = index.reader()?;
+
+		Ok(Searcher {
+			index_path,
+			field_id,
+			field_title,
+			field_summary,
+			field_content,
+			schema,
+			index,
+			index_reader,
+			index_writer: tokio::sync::Mutex::new(index_writer),
+		})
+	}
+
 	pub fn search(&self, query_request: SearchQuery) -> Result<Vec<Document>> {
 		let searcher = self.index_reader.searcher();
 		let query_parser = QueryParser::for_index(

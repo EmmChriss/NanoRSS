@@ -15,7 +15,7 @@ use axum::{
 	middleware::Next,
 	response::Response,
 	routing::{any, get, post},
-	Json, Router,
+	Extension, Json, Router,
 };
 use base64::Engine;
 use db::{Article, ExportOpts, Feed, NewFeed, NewUser, PatchFeed, User};
@@ -34,7 +34,8 @@ async fn main() {
 
 type AppState = Arc<App>;
 
-pub struct CurrentUser(User);
+#[derive(Clone)]
+pub struct CurrentUser(String);
 
 async fn auth<B>(
 	State(state): State<AppState>,
@@ -70,7 +71,7 @@ async fn auth<B>(
 		_ => unimplemented!(),
 	};
 
-	req.extensions_mut().insert(CurrentUser(user));
+	req.extensions_mut().insert(CurrentUser(user.username));
 	Ok(next.run(req).await)
 }
 
@@ -115,6 +116,8 @@ async fn main2() -> anyhow::Result<()> {
 	}
 
 	// init routes
+	let state = Arc::new(app);
+
 	let router = Router::new()
 		.route("/api/v1/status", any(|| async { "OK".to_string() }))
 		.route("/api/v1/import", post(import))
@@ -126,8 +129,8 @@ async fn main2() -> anyhow::Result<()> {
 		.route("/api/v1/articles", get(get_articles))
 		.route("/api/v1/search", post(search))
 		.route("/api/v1/refresh", post(refresh))
-		.route_layer(axum::middleware::from_fn_with_state(app.clone(), auth))
-		.with_state(app.clone())
+		.route_layer(axum::middleware::from_fn_with_state(state.clone(), auth))
+		.with_state(state.clone())
 		.layer(CorsLayer::permissive());
 
 	let addr = SocketAddr::new(addr.parse().unwrap(), port.parse().unwrap());
@@ -139,36 +142,61 @@ async fn main2() -> anyhow::Result<()> {
 	Ok(())
 }
 
-async fn get_feeds(State(state): State<AppState>) -> Result<Json<Vec<Feed>>> {
-	Feed::get_all(&state).map(Json)
+async fn get_feeds(
+	State(state): State<AppState>,
+	Extension(CurrentUser(username)): Extension<CurrentUser>,
+) -> Result<Json<Vec<Feed>>> {
+	Feed::get_all(&state.open_user(&username)?).map(Json)
 }
 
-async fn post_feed(State(state): State<AppState>, Json(new_feed): Json<NewFeed>) -> Result<()> {
-	new_feed.insert(&state).await.map(|_| ())
+async fn post_feed(
+	State(state): State<AppState>,
+	Extension(CurrentUser(username)): Extension<CurrentUser>,
+	Json(new_feed): Json<NewFeed>,
+) -> Result<()> {
+	new_feed
+		.insert(&state.open_user(&username)?)
+		.await
+		.map(|_| ())
 }
 
 async fn patch_feed(
 	State(state): State<AppState>,
+	Extension(CurrentUser(username)): Extension<CurrentUser>,
 	Json(patch_feed): Json<PatchFeed>,
 ) -> Result<()> {
-	patch_feed.apply(&state)
+	patch_feed.apply(&state.open_user(&username)?)
 }
 
-async fn refresh(State(state): State<AppState>) -> Result<()> {
-	fetch::fetch_all_feeds(&state).await
+async fn refresh(
+	State(state): State<AppState>,
+	Extension(CurrentUser(username)): Extension<CurrentUser>,
+) -> Result<()> {
+	fetch::fetch_all_feeds(&state, &state.open_user(&username)?).await
 }
 
-async fn get_articles(State(state): State<AppState>) -> Result<Json<Vec<Article>>> {
-	Article::get_all(&state).map(Json)
+async fn get_articles(
+	State(state): State<AppState>,
+	Extension(CurrentUser(username)): Extension<CurrentUser>,
+) -> Result<Json<Vec<Article>>> {
+	Article::get_all(&state.open_user(&username)?).map(Json)
 }
 
-async fn import(State(state): State<AppState>, body: String) -> Result<()> {
+async fn import(
+	State(state): State<AppState>,
+	Extension(CurrentUser(username)): Extension<CurrentUser>,
+	body: String,
+) -> Result<()> {
 	let opml = opml::OPML::from_str(&body)?;
-	db::import(&state, db::ImportOpts::Opml(opml)).await
+	db::import(&state.open_user(&username)?, db::ImportOpts::Opml(opml)).await
 }
 
-async fn export(State(state): State<AppState>, Query(opts): Query<ExportOpts>) -> Result<String> {
-	db::export(&state, opts)
+async fn export(
+	State(state): State<AppState>,
+	Extension(CurrentUser(username)): Extension<CurrentUser>,
+	Query(opts): Query<ExportOpts>,
+) -> Result<String> {
+	db::export(&state.open_user(&username)?, opts)
 }
 
 async fn search(

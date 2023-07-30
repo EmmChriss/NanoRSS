@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use url::Url;
 
-use crate::{App, Error, Result};
+use crate::{app::AppUserDb, App, Error, Result};
 
 #[derive(Serialize, Deserialize)]
 pub struct NewUser {
@@ -67,7 +67,7 @@ pub struct NewFeed {
 }
 
 impl NewFeed {
-	pub async fn insert(self, app: &App) -> Result<()> {
+	pub async fn insert(self, app: &AppUserDb) -> Result<()> {
 		Feed {
 			id: app.db.generate_id()?,
 			url: self.url,
@@ -92,7 +92,7 @@ pub struct PatchFeed {
 }
 
 impl PatchFeed {
-	pub fn apply(self, app: &App) -> Result<()> {
+	pub fn apply(self, app: &AppUserDb) -> Result<()> {
 		let mut feed = Feed::get_feed(app, self.id)?.ok_or(Error::NotFound("feed".into()))?;
 
 		if let Some(url) = self.url {
@@ -121,13 +121,13 @@ pub struct Feed {
 }
 
 impl Feed {
-	pub fn insert(&self, app: &App) -> Result<()> {
+	pub fn insert(&self, app: &AppUserDb) -> Result<()> {
 		app.feeds
 			.insert(bincode::serialize(&self.id)?, bincode::serialize(&self)?)?;
 		Ok(())
 	}
 
-	pub fn get_feed(app: &App, id: u64) -> Result<Option<Feed>> {
+	pub fn get_feed(app: &AppUserDb, id: u64) -> Result<Option<Feed>> {
 		let maybe_feed = app.feeds.get(bincode::serialize(&id)?)?;
 
 		let feed = if let Some(feed) = maybe_feed {
@@ -139,7 +139,7 @@ impl Feed {
 		Ok(feed)
 	}
 
-	pub fn get_all(app: &App) -> Result<Vec<Feed>> {
+	pub fn get_all(app: &AppUserDb) -> Result<Vec<Feed>> {
 		app.feeds
 			.iter()
 			.map(|item| {
@@ -159,14 +159,14 @@ pub struct Article {
 }
 
 impl Article {
-	pub fn insert(&self, app: &App) -> Result<()> {
+	pub fn insert(&self, app: &AppUserDb) -> Result<()> {
 		app.articles
 			.insert(self.id.as_bytes(), bincode::serialize(self)?)
 			.map(|_| ())
 			.map_err(Error::from)
 	}
 
-	pub fn get_all(app: &App) -> Result<Vec<Article>> {
+	pub fn get_all(app: &AppUserDb) -> Result<Vec<Article>> {
 		app.articles
 			.iter()
 			.map(|item| {
@@ -196,7 +196,7 @@ pub enum ImportOpts {
 	Opml(opml::OPML),
 }
 
-pub async fn import(app: &App, opts: ImportOpts) -> Result<()> {
+pub async fn import(app: &AppUserDb, opts: ImportOpts) -> Result<()> {
 	match opts {
 		ImportOpts::Opml(opml) => {
 			fn walk_outlines(outline: opml::Outline, collector: &mut Vec<opml::Outline>) {
@@ -239,7 +239,7 @@ pub enum ExportOpts {
 	Opml,
 }
 
-pub fn export(app: &App, opts: ExportOpts) -> Result<String> {
+pub fn export(app: &AppUserDb, opts: ExportOpts) -> Result<String> {
 	match opts {
 		ExportOpts::Opml => {
 			let mut opml = opml::OPML::default();
