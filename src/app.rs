@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::err::Result;
-use crate::search::Searcher;
 
 pub struct Config {
 	pub db_path: PathBuf,
@@ -12,7 +11,6 @@ pub struct App {
 	db: sled::Db,
 	pub users: sled::Tree,
 	client: reqwest::Client,
-	searcher: Searcher,
 }
 
 pub struct AppUser {
@@ -20,7 +18,6 @@ pub struct AppUser {
 	pub feeds: sled::Tree,
 	pub articles: sled::Tree,
 	pub client: reqwest::Client,
-	pub searcher: Searcher,
 }
 
 impl App {
@@ -47,14 +44,7 @@ impl App {
 			.connect_timeout(Duration::from_secs(10))
 			.build()?;
 
-		let searcher = Searcher::new(&cfg.db_path)?;
-
-		Ok(Self {
-			db,
-			users,
-			client,
-			searcher,
-		})
+		Ok(Self { db, users, client })
 	}
 
 	pub fn open_user(&self, username: &str) -> Result<AppUser> {
@@ -71,7 +61,6 @@ impl App {
 			feeds,
 			articles,
 			client: self.client.clone(),
-			searcher: self.searcher.clone(),
 		})
 	}
 }

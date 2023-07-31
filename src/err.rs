@@ -50,12 +50,6 @@ pub enum Error {
 
 	#[error("io error: {0}")]
 	Io(#[from] std::io::Error),
-
-	#[error("error in search engine: {0}")]
-	Tantivy(#[from] tantivy::TantivyError),
-
-	#[error("error parsing search query: {0}")]
-	SearchQuery(#[from] tantivy::query::QueryParserError),
 }
 
 impl IntoResponse for Error {

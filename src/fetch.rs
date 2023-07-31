@@ -61,17 +61,7 @@ pub async fn fetch_all_feeds(app: &AppUser) -> Result<()> {
 		})
 		.await?;
 
-	// instead of diffing, re-cache all articles here
-	let index_writer = &mut app.searcher.index.writer(50_000_000)?;
-	index_writer.delete_all_documents()?;
-
-	for article in Article::get_all(&app)? {
-		// add new document
-		let doc = article.create_doc(app);
-		index_writer.add_document(doc)?;
-	}
-
-	index_writer.commit()?;
+	// TODO: create search index
 
 	Ok(())
 }

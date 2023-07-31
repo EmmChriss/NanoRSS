@@ -175,20 +175,6 @@ impl Article {
 			})
 			.collect()
 	}
-
-	pub fn create_doc(&self, app: &AppUser) -> tantivy::Document {
-		let id = app.searcher.field_id;
-		let title = app.searcher.field_title;
-		let summary = app.searcher.field_summary;
-		let content = app.searcher.field_content;
-
-		tantivy::doc!(
-			id => &*self.id,
-			title => &*self.title,
-			summary => &*self.summary,
-			content => &*self.content
-		)
-	}
 }
 
 #[non_exhaustive]

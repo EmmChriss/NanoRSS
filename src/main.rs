@@ -4,7 +4,6 @@ mod app;
 mod db;
 mod err;
 mod fetch;
-mod search;
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
@@ -21,7 +20,6 @@ use base64::Engine;
 use db::{Article, ExportOpts, Feed, NewFeed, NewUser, PatchFeed, User};
 pub use err::{Error, Result};
 
-use search::SearchQuery;
 use tower_http::cors::CorsLayer;
 
 #[tokio::main]
@@ -202,7 +200,6 @@ async fn export(
 async fn search(
 	State(state): State<AppState>,
 	Extension(CurrentUser(username)): Extension<CurrentUser>,
-	Query(query): Query<SearchQuery>,
-) -> Result<Json<Vec<tantivy::Document>>> {
-	state.open_user(&username)?.searcher.search(query).map(Json)
+) -> Result<Json<Vec<String>>> {
+	todo!()
 }
