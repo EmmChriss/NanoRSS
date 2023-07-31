@@ -50,6 +50,12 @@ pub enum Error {
 
 	#[error("io error: {0}")]
 	Io(#[from] std::io::Error),
+
+	#[error("string not utf8: {0}")]
+	Utf8(#[from] std::string::FromUtf8Error),
+
+	#[error("transaction error: {0}")]
+	Transaction(#[from] sled::transaction::TransactionError),
 }
 
 impl IntoResponse for Error {

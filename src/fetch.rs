@@ -61,7 +61,8 @@ pub async fn fetch_all_feeds(app: &AppUser) -> Result<()> {
 		})
 		.await?;
 
-	// TODO: create search index
+	// create search index
+	app.create_search_index()?;
 
 	Ok(())
 }

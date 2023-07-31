@@ -1,3 +1,4 @@
+use indicium::simple::Indexable;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use url::Url;
@@ -174,6 +175,16 @@ impl Article {
 					.and_then(|(_, v)| bincode::deserialize(&v).map_err(Error::from))
 			})
 			.collect()
+	}
+}
+
+impl Indexable for Article {
+	fn strings(&self) -> Vec<String> {
+		return vec![
+			self.title.clone(),
+			self.summary.clone(),
+			self.content.clone(),
+		];
 	}
 }
 

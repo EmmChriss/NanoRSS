@@ -20,6 +20,7 @@ use base64::Engine;
 use db::{Article, ExportOpts, Feed, NewFeed, NewUser, PatchFeed, User};
 pub use err::{Error, Result};
 
+use serde::Deserialize;
 use tower_http::cors::CorsLayer;
 
 #[tokio::main]
@@ -197,9 +198,15 @@ async fn export(
 	db::export(&state.open_user(&username)?, opts)
 }
 
+#[derive(Deserialize)]
+struct SearchQuery {
+	q: String,
+}
+
 async fn search(
 	State(state): State<AppState>,
 	Extension(CurrentUser(username)): Extension<CurrentUser>,
+	Query(query): Query<SearchQuery>,
 ) -> Result<Json<Vec<String>>> {
-	todo!()
+	state.open_user(&username)?.search(&query.q).map(Json)
 }
