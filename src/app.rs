@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -61,7 +61,6 @@ impl App {
 			db,
 			feeds,
 			articles,
-			search_index,
 			client: self.client.clone(),
 		})
 	}
@@ -71,20 +70,22 @@ pub struct AppUser {
 	pub db: sled::Db,
 	pub feeds: sled::Tree,
 	pub articles: sled::Tree,
-	pub search_index: sled::Tree,
 	pub client: reqwest::Client,
 }
 
 impl AppUser {
 	pub fn search(&self, term: &str) -> Result<Vec<String>> {
-		// reconstruct search index
+		// reconstruct search index from sled
+		let b_tree: BTreeMap<String, BTreeSet<String>> = self
+			.articles
+			.get(b"__search_index")?
+			.map(|bytes| bincode::deserialize(&bytes))
+			.transpose()?
+			.unwrap_or_default();
+
+		// hackly replace search index b_tree_map
 		let mut search_index = indicium::simple::SearchIndexBuilder::default().build();
-		for entry in self.search_index.iter() {
-			let (k, v) = entry?;
-			let k = String::from_utf8(k.to_vec())?;
-			let v: BTreeSet<String> = bincode::deserialize(&v)?;
-			(*search_index).insert(k, v);
-		}
+		*search_index = b_tree;
 
 		// search results
 		Ok(search_index
@@ -101,17 +102,9 @@ impl AppUser {
 			search_index.insert(&article.id, &article);
 		}
 
-		// remove all previous index values
-		for entry in self.search_index.iter() {
-			let (k, _) = entry?;
-			self.search_index.remove(k)?;
-		}
-
 		// manually serialize search index into db
-		for (k, v) in (*search_index).iter() {
-			self.search_index
-				.insert(k.as_bytes(), bincode::serialize(v)?)?;
-		}
+		self.articles
+			.insert(b"__search_index", bincode::serialize(&*search_index)?)?;
 
 		Ok(())
 	}
