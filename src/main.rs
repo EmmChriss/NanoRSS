@@ -172,7 +172,7 @@ async fn refresh(
 	State(state): State<AppState>,
 	Extension(CurrentUser(username)): Extension<CurrentUser>,
 ) -> Result<()> {
-	fetch::fetch_all_feeds(&state, &state.open_user(&username)?).await
+	fetch::fetch_all_feeds(&state.open_user(&username)?).await
 }
 
 async fn get_articles(
@@ -201,7 +201,8 @@ async fn export(
 
 async fn search(
 	State(state): State<AppState>,
+	Extension(CurrentUser(username)): Extension<CurrentUser>,
 	Query(query): Query<SearchQuery>,
 ) -> Result<Json<Vec<tantivy::Document>>> {
-	state.searcher.search(query).map(Json)
+	state.open_user(&username)?.searcher.search(query).map(Json)
 }

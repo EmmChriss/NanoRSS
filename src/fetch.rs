@@ -1,14 +1,15 @@
+use futures::stream::TryStreamExt;
 use time::{OffsetDateTime, UtcOffset};
 
 use crate::{
-	app::AppUserDb,
+	app::AppUser,
 	db::{Article, Feed},
 	err::Result,
-	App,
+	Error,
 };
 
 // TODO: implement scraper
-pub async fn fetch_feed(app: &App, app_user: &AppUserDb, feed: &Feed) -> Result<()> {
+pub async fn fetch_feed(app: &AppUser, feed: &Feed) -> Result<()> {
 	let response = app
 		.client
 		.get(feed.url.clone())
@@ -33,27 +34,44 @@ pub async fn fetch_feed(app: &App, app_user: &AppUserDb, feed: &Feed) -> Result<
 				.map(|content| content.body.unwrap_or_default())
 				.unwrap_or_default(),
 		}
-		.insert(app_user)?;
+		.insert(app)?;
 	}
 
 	Ok(())
 }
 
-pub async fn fetch_all_feeds(app: &App, app_user: &AppUserDb) -> Result<()> {
-	for mut feed in Feed::get_all(&app_user)? {
-		let result = fetch_feed(app, app_user, &feed).await;
+pub async fn fetch_all_feeds(app: &AppUser) -> Result<()> {
+	// do these concurrently
+	futures::stream::iter(Feed::get_all(&app)?.into_iter().map(Ok))
+		.try_for_each_concurrent(32, |mut feed| async move {
+			let result = fetch_feed(app, &feed).await;
 
-		// attempt to take local time with timezone
-		// fall back to just taking local datetime
-		let time = OffsetDateTime::now_local()
-			.map(|t| t.to_offset(UtcOffset::UTC))
-			.unwrap_or_else(|_| OffsetDateTime::now_utc());
+			// attempt to take local time with timezone
+			// fall back to just taking local datetime
+			let time = OffsetDateTime::now_local()
+				.map(|t| t.to_offset(UtcOffset::UTC))
+				.unwrap_or_else(|_| OffsetDateTime::now_utc());
 
-		feed.last_fetch_time = time;
-		feed.last_error = result.err().map(|e| format!("{}", e));
+			feed.last_fetch_time = time;
+			feed.last_error = result.err().map(|e| format!("{}", e));
 
-		feed.insert(app_user)?;
+			feed.insert(app)?;
+
+			Ok::<_, Error>(())
+		})
+		.await?;
+
+	// instead of diffing, re-cache all articles here
+	let index_writer = &mut app.searcher.index.writer(50_000_000)?;
+	index_writer.delete_all_documents()?;
+
+	for article in Article::get_all(&app)? {
+		// add new document
+		let doc = article.create_doc(app);
+		index_writer.add_document(doc)?;
 	}
+
+	index_writer.commit()?;
 
 	Ok(())
 }

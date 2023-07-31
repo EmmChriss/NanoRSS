@@ -9,16 +9,18 @@ pub struct Config {
 }
 
 pub struct App {
-	pub db: sled::Db,
+	db: sled::Db,
 	pub users: sled::Tree,
-	pub client: reqwest::Client,
-	pub searcher: Searcher,
+	client: reqwest::Client,
+	searcher: Searcher,
 }
 
-pub struct AppUserDb {
+pub struct AppUser {
 	pub db: sled::Db,
 	pub feeds: sled::Tree,
 	pub articles: sled::Tree,
+	pub client: reqwest::Client,
+	pub searcher: Searcher,
 }
 
 impl App {
@@ -45,7 +47,7 @@ impl App {
 			.connect_timeout(Duration::from_secs(10))
 			.build()?;
 
-		let searcher = Searcher::new()?;
+		let searcher = Searcher::new(&cfg.db_path)?;
 
 		Ok(Self {
 			db,
@@ -55,7 +57,7 @@ impl App {
 		})
 	}
 
-	pub fn open_user(&self, username: &str) -> Result<AppUserDb> {
+	pub fn open_user(&self, username: &str) -> Result<AppUser> {
 		let db = self.db.clone();
 		let feeds = self
 			.db
@@ -64,10 +66,12 @@ impl App {
 			.db
 			.open_tree(format!("{}/{}", username, Self::TREE_ARTICLES))?;
 
-		Ok(AppUserDb {
+		Ok(AppUser {
 			db,
 			feeds,
 			articles,
+			client: self.client.clone(),
+			searcher: self.searcher.clone(),
 		})
 	}
 }

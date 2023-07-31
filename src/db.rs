@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use url::Url;
 
-use crate::{app::AppUserDb, App, Error, Result};
+use crate::{app::AppUser, App, Error, Result};
 
 #[derive(Serialize, Deserialize)]
 pub struct NewUser {
@@ -11,8 +11,8 @@ pub struct NewUser {
 }
 
 impl NewUser {
-	pub fn insert(self, db: &App) -> Result<User> {
-		if db.users.contains_key(self.username.as_bytes())? {
+	pub fn insert(self, app: &App) -> Result<User> {
+		if app.users.contains_key(self.username.as_bytes())? {
 			return Err(Error::UsernameTaken);
 		}
 
@@ -22,7 +22,7 @@ impl NewUser {
 			pass_hash,
 		};
 
-		db.users
+		app.users
 			.insert(user.username.as_bytes(), bincode::serialize(&user)?)?;
 
 		Ok(user)
@@ -67,7 +67,7 @@ pub struct NewFeed {
 }
 
 impl NewFeed {
-	pub async fn insert(self, app: &AppUserDb) -> Result<()> {
+	pub async fn insert(self, app: &AppUser) -> Result<()> {
 		Feed {
 			id: app.db.generate_id()?,
 			url: self.url,
@@ -92,7 +92,7 @@ pub struct PatchFeed {
 }
 
 impl PatchFeed {
-	pub fn apply(self, app: &AppUserDb) -> Result<()> {
+	pub fn apply(self, app: &AppUser) -> Result<()> {
 		let mut feed = Feed::get_feed(app, self.id)?.ok_or(Error::NotFound("feed".into()))?;
 
 		if let Some(url) = self.url {
@@ -121,13 +121,13 @@ pub struct Feed {
 }
 
 impl Feed {
-	pub fn insert(&self, app: &AppUserDb) -> Result<()> {
+	pub fn insert(&self, app: &AppUser) -> Result<()> {
 		app.feeds
 			.insert(bincode::serialize(&self.id)?, bincode::serialize(&self)?)?;
 		Ok(())
 	}
 
-	pub fn get_feed(app: &AppUserDb, id: u64) -> Result<Option<Feed>> {
+	pub fn get_feed(app: &AppUser, id: u64) -> Result<Option<Feed>> {
 		let maybe_feed = app.feeds.get(bincode::serialize(&id)?)?;
 
 		let feed = if let Some(feed) = maybe_feed {
@@ -139,7 +139,7 @@ impl Feed {
 		Ok(feed)
 	}
 
-	pub fn get_all(app: &AppUserDb) -> Result<Vec<Feed>> {
+	pub fn get_all(app: &AppUser) -> Result<Vec<Feed>> {
 		app.feeds
 			.iter()
 			.map(|item| {
@@ -159,14 +159,14 @@ pub struct Article {
 }
 
 impl Article {
-	pub fn insert(&self, app: &AppUserDb) -> Result<()> {
+	pub fn insert(&self, app: &AppUser) -> Result<()> {
 		app.articles
 			.insert(self.id.as_bytes(), bincode::serialize(self)?)
 			.map(|_| ())
 			.map_err(Error::from)
 	}
 
-	pub fn get_all(app: &AppUserDb) -> Result<Vec<Article>> {
+	pub fn get_all(app: &AppUser) -> Result<Vec<Article>> {
 		app.articles
 			.iter()
 			.map(|item| {
@@ -176,7 +176,7 @@ impl Article {
 			.collect()
 	}
 
-	pub fn create_doc(&self, app: &App) -> tantivy::Document {
+	pub fn create_doc(&self, app: &AppUser) -> tantivy::Document {
 		let id = app.searcher.field_id;
 		let title = app.searcher.field_title;
 		let summary = app.searcher.field_summary;
@@ -196,7 +196,7 @@ pub enum ImportOpts {
 	Opml(opml::OPML),
 }
 
-pub async fn import(app: &AppUserDb, opts: ImportOpts) -> Result<()> {
+pub async fn import(app: &AppUser, opts: ImportOpts) -> Result<()> {
 	match opts {
 		ImportOpts::Opml(opml) => {
 			fn walk_outlines(outline: opml::Outline, collector: &mut Vec<opml::Outline>) {
@@ -239,7 +239,7 @@ pub enum ExportOpts {
 	Opml,
 }
 
-pub fn export(app: &AppUserDb, opts: ExportOpts) -> Result<String> {
+pub fn export(app: &AppUser, opts: ExportOpts) -> Result<String> {
 	match opts {
 		ExportOpts::Opml => {
 			let mut opml = opml::OPML::default();
