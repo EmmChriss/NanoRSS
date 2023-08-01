@@ -7,7 +7,7 @@ mod fetch;
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
-use app::App;
+use app::{App, Status};
 use axum::{
 	extract::{Query, State},
 	http::Request,
@@ -118,7 +118,7 @@ async fn main2() -> anyhow::Result<()> {
 	let state = Arc::new(app);
 
 	let router = Router::new()
-		.route("/api/v1/status", any(|| async { "OK".to_string() }))
+		.route("/api/v1/status", any(get_status))
 		.route("/api/v1/import", post(import))
 		.route("/api/v1/export", post(export))
 		.route(
@@ -126,7 +126,6 @@ async fn main2() -> anyhow::Result<()> {
 			get(get_feeds).post(post_feed).patch(patch_feed),
 		)
 		.route("/api/v1/articles", get(get_articles))
-		.route("/api/v1/search", post(search))
 		.route("/api/v1/refresh", post(refresh))
 		.route_layer(axum::middleware::from_fn_with_state(state.clone(), auth))
 		.with_state(state.clone())
@@ -139,6 +138,14 @@ async fn main2() -> anyhow::Result<()> {
 		.unwrap();
 
 	Ok(())
+}
+
+#[axum_macros::debug_handler]
+async fn get_status(
+	State(state): State<AppState>,
+	Extension(CurrentUser(username)): Extension<CurrentUser>,
+) -> Result<Json<Status>> {
+	state.open_user(&username)?.status().map(Json)
 }
 
 async fn get_feeds(
@@ -196,17 +203,4 @@ async fn export(
 	Query(opts): Query<ExportOpts>,
 ) -> Result<String> {
 	db::export(&state.open_user(&username)?, opts)
-}
-
-#[derive(Deserialize)]
-struct SearchQuery {
-	q: String,
-}
-
-async fn search(
-	State(state): State<AppState>,
-	Extension(CurrentUser(username)): Extension<CurrentUser>,
-	Query(query): Query<SearchQuery>,
-) -> Result<Json<Vec<String>>> {
-	state.open_user(&username)?.search(&query.q).map(Json)
 }

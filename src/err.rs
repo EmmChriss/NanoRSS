@@ -45,9 +45,6 @@ pub enum Error {
 	#[error("error parsing url: {0}")]
 	Url(#[from] url::ParseError),
 
-	#[error("error getting local timezone: {0}")]
-	Timezone(#[from] time::error::IndeterminateOffset),
-
 	#[error("io error: {0}")]
 	Io(#[from] std::io::Error),
 

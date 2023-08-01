@@ -1,5 +1,5 @@
+use chrono::Utc;
 use futures::stream::TryStreamExt;
-use time::{OffsetDateTime, UtcOffset};
 
 use crate::{
 	app::AppUser,
@@ -24,11 +24,30 @@ pub async fn fetch_feed(app: &AppUser, feed: &Feed) -> Result<()> {
 	let parsed = feed_rs::parser::parse_with_uri(response_byteslice, Some(feed.url.as_str()))?;
 
 	// insert new stuff
+	let utc_now = Utc::now();
 	for entry in parsed.entries {
+		// NOTE: we might be getting an error here because the scema does not parse anymore
+		let prev_article = match Article::get_id(app, &entry.id) {
+			Ok(a) => a,
+			Err(e) => {
+				log::warn!("could not get article from db: {}", e);
+				None
+			}
+		};
 		Article {
 			id: entry.id,
+			feed_id: feed.id,
+			url: entry
+				.content
+				.as_ref()
+				.and_then(|content| content.src.as_ref().map(|link| link.href.clone()))
+				.or_else(|| entry.links.first().map(|link| link.href.clone())),
 			title: entry.title.map(|text| text.content).unwrap_or_default(),
 			summary: entry.summary.map(|text| text.content).unwrap_or_default(),
+			published: entry
+				.published
+				.or_else(|| prev_article.map(|article| article.published))
+				.unwrap_or(utc_now),
 			content: entry
 				.content
 				.map(|content| content.body.unwrap_or_default())
@@ -46,13 +65,7 @@ pub async fn fetch_all_feeds(app: &AppUser) -> Result<()> {
 		.try_for_each_concurrent(32, |mut feed| async move {
 			let result = fetch_feed(app, &feed).await;
 
-			// attempt to take local time with timezone
-			// fall back to just taking local datetime
-			let time = OffsetDateTime::now_local()
-				.map(|t| t.to_offset(UtcOffset::UTC))
-				.unwrap_or_else(|_| OffsetDateTime::now_utc());
-
-			feed.last_fetch_time = time;
+			feed.last_fetch_time = Utc::now();
 			feed.last_error = result.err().map(|e| format!("{}", e));
 
 			feed.insert(app)?;

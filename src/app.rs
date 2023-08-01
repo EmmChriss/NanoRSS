@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use indicium::simple::SearchIndex;
+use chrono::{DateTime, Utc};
+use serde::Serialize;
 
 use crate::db::Article;
 use crate::err::Result;
@@ -68,6 +69,12 @@ impl App {
 	}
 }
 
+#[derive(Serialize)]
+pub struct Status {
+	last_new_article: DateTime<Utc>,
+	total_articles: u32,
+}
+
 pub struct AppUser {
 	pub db: sled::Db,
 	pub feeds: sled::Tree,
@@ -77,6 +84,21 @@ pub struct AppUser {
 }
 
 impl AppUser {
+	pub fn status(&self) -> Result<Status> {
+		let mut status = Status {
+			last_new_article: DateTime::<Utc>::MIN_UTC,
+			total_articles: 0,
+		};
+
+		for article in Article::iter(self) {
+			let article = article?;
+			status.total_articles += 1;
+			status.last_new_article = status.last_new_article.max(article.published);
+		}
+
+		Ok(status)
+	}
+
 	pub fn search(&self, term: &str) -> Result<Vec<String>> {
 		// reconstruct search index from sled
 		let b_tree: BTreeMap<String, BTreeSet<String>> = self
@@ -101,7 +123,8 @@ impl AppUser {
 	pub fn create_search_index(&self) -> Result<()> {
 		// create index
 		let mut search_index = indicium::simple::SearchIndexBuilder::default().build();
-		for article in Article::get_all(self)? {
+		for article in Article::iter(self) {
+			let article = article?;
 			search_index.insert(&article.id, &article);
 		}
 

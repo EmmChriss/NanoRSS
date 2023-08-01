@@ -22,7 +22,7 @@ axum-macros = "0.3"
 tower = { version = "0.4", features = ["full"] }
 tower-http = { version = "0.4", features = ["compression-deflate", "cors", "fs"] }
 reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
-time = { version = "0.3.2", features = ["serde", "local-offset"] }
+chrono = { version = "0.4", features = ["serde"] }
 url = { version = "2.2.2", features = ["serde"] }
 sled = "0.34"
 bincode = "1"

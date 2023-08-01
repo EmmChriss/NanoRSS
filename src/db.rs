@@ -1,6 +1,5 @@
-use indicium::simple::Indexable;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use url::Url;
 
 use crate::{app::AppUser, App, Error, Result};
@@ -75,7 +74,7 @@ impl NewFeed {
 			name: self.name.unwrap_or_default(),
 			scraper: self.scraper,
 
-			last_fetch_time: OffsetDateTime::UNIX_EPOCH,
+			last_fetch_time: DateTime::<Utc>::MIN_UTC,
 			last_error: None,
 		}
 		.insert(app)?;
@@ -94,7 +93,7 @@ pub struct PatchFeed {
 
 impl PatchFeed {
 	pub fn apply(self, app: &AppUser) -> Result<()> {
-		let mut feed = Feed::get_feed(app, self.id)?.ok_or(Error::NotFound("feed".into()))?;
+		let mut feed = Feed::get_id(app, self.id)?.ok_or(Error::NotFound("feed".into()))?;
 
 		if let Some(url) = self.url {
 			feed.url = url;
@@ -117,7 +116,7 @@ pub struct Feed {
 	pub name: String,
 	pub scraper: Option<ScraperConfig>,
 
-	pub last_fetch_time: OffsetDateTime,
+	pub last_fetch_time: DateTime<Utc>,
 	pub last_error: Option<String>,
 }
 
@@ -128,12 +127,13 @@ impl Feed {
 		Ok(())
 	}
 
-	pub fn get_feed(app: &AppUser, id: u64) -> Result<Option<Feed>> {
+	pub fn get_id(app: &AppUser, id: u64) -> Result<Option<Feed>> {
 		let maybe_feed = app.feeds.get(bincode::serialize(&id)?)?;
 
 		let feed = if let Some(feed) = maybe_feed {
 			bincode::deserialize(&feed)?
-		} else {
+		}
+		else {
 			None
 		};
 
@@ -154,12 +154,28 @@ impl Feed {
 #[derive(Serialize, Deserialize)]
 pub struct Article {
 	pub id: String,
+	pub feed_id: u64,
+	pub published: DateTime<Utc>,
+	pub url: Option<String>,
 	pub title: String,
 	pub summary: String,
 	pub content: String,
 }
 
 impl Article {
+	pub fn get_id(app: &AppUser, id: &str) -> Result<Option<Article>> {
+		let maybe = app.articles.get(bincode::serialize(&id)?)?;
+
+		let article = if let Some(feed) = maybe {
+			bincode::deserialize(&feed)?
+		}
+		else {
+			None
+		};
+
+		Ok(article)
+	}
+
 	pub fn insert(&self, app: &AppUser) -> Result<()> {
 		app.articles
 			.insert(self.id.as_bytes(), bincode::serialize(self)?)
@@ -167,18 +183,19 @@ impl Article {
 			.map_err(Error::from)
 	}
 
+	pub fn iter(app: &AppUser) -> impl Iterator<Item = Result<Article>> {
+		app.articles.iter().map(|item| {
+			item.map_err(Error::from)
+				.and_then(|(_, v)| bincode::deserialize::<Article>(&v).map_err(Error::from))
+		})
+	}
+
 	pub fn get_all(app: &AppUser) -> Result<Vec<Article>> {
-		app.articles
-			.iter()
-			.map(|item| {
-				item.map_err(Error::from)
-					.and_then(|(_, v)| bincode::deserialize(&v).map_err(Error::from))
-			})
-			.collect()
+		Article::iter(app).collect()
 	}
 }
 
-impl Indexable for Article {
+impl indicium::simple::Indexable for Article {
 	fn strings(&self) -> Vec<String> {
 		return vec![
 			self.title.clone(),
