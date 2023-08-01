@@ -30,7 +30,8 @@ impl App {
 
 		let db = if cfg!(debug_assertions) {
 			db.print_profile_on_drop(true)
-		} else {
+		}
+		else {
 			db
 		};
 
@@ -53,7 +54,7 @@ impl App {
 		let articles = self
 			.db
 			.open_tree(format!("{}/{}", username, Self::TREE_ARTICLES))?;
-		let search_index = self
+		let index = self
 			.db
 			.open_tree(format!("{}/{}", username, Self::TREE_INDEX))?;
 
@@ -61,6 +62,7 @@ impl App {
 			db,
 			feeds,
 			articles,
+			index,
 			client: self.client.clone(),
 		})
 	}
@@ -70,6 +72,7 @@ pub struct AppUser {
 	pub db: sled::Db,
 	pub feeds: sled::Tree,
 	pub articles: sled::Tree,
+	pub index: sled::Tree,
 	pub client: reqwest::Client,
 }
 
@@ -77,8 +80,8 @@ impl AppUser {
 	pub fn search(&self, term: &str) -> Result<Vec<String>> {
 		// reconstruct search index from sled
 		let b_tree: BTreeMap<String, BTreeSet<String>> = self
-			.articles
-			.get(b"__search_index")?
+			.index
+			.get(b"__article_search_index")?
 			.map(|bytes| bincode::deserialize(&bytes))
 			.transpose()?
 			.unwrap_or_default();
@@ -103,8 +106,10 @@ impl AppUser {
 		}
 
 		// manually serialize search index into db
-		self.articles
-			.insert(b"__search_index", bincode::serialize(&*search_index)?)?;
+		self.index.insert(
+			b"__article_search_index",
+			bincode::serialize(&*search_index)?,
+		)?;
 
 		Ok(())
 	}

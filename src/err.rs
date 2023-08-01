@@ -28,7 +28,7 @@ pub enum Error {
 	Sled(#[from] sled::Error),
 
 	#[error("serialization error: {0}")]
-	RmpEncode(#[from] bincode::Error),
+	Encode(#[from] bincode::Error),
 
 	#[error("http client error: {0}")]
 	Reqwest(#[from] reqwest::Error),
