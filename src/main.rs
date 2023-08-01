@@ -5,7 +5,7 @@ mod db;
 mod err;
 mod fetch;
 
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{collections::BTreeSet, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use app::{App, Status};
 use axum::{
@@ -126,6 +126,7 @@ async fn main2() -> anyhow::Result<()> {
 			get(get_feeds).post(post_feed).patch(patch_feed),
 		)
 		.route("/api/v1/articles", get(get_articles))
+		.route("/api/v1/search", post(search))
 		.route("/api/v1/refresh", post(refresh))
 		.route_layer(axum::middleware::from_fn_with_state(state.clone(), auth))
 		.with_state(state.clone())
@@ -203,4 +204,72 @@ async fn export(
 	Query(opts): Query<ExportOpts>,
 ) -> Result<String> {
 	db::export(&state.open_user(&username)?, opts)
+}
+
+#[derive(Deserialize)]
+struct ArticleRequest {
+	field_id: Option<u64>,
+	q: Option<String>,
+	order_by: Option<ArticleOrderBy>,
+	order: Option<Order>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ArticleOrderBy {
+	Title,
+	Published,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Order {
+	Asc,
+	Desc,
+}
+
+async fn search(
+	State(state): State<AppState>,
+	Extension(CurrentUser(username)): Extension<CurrentUser>,
+	Query(query): Query<ArticleRequest>,
+) -> Result<Json<Vec<String>>> {
+	let app = state.open_user(&username)?;
+	let search_results = query
+		.q
+		.as_ref()
+		.map(|q| app.search(q))
+		.transpose()?
+		.map(|res| BTreeSet::from_iter(res));
+
+	let mut articles = vec![];
+	for article in Article::iter(&app) {
+		let article = article?;
+
+		if let Some(false) = search_results.as_ref().map(|s| s.contains(&article.id)) {
+			continue;
+		}
+
+		if let Some(false) = query.field_id.as_ref().map(|f_id| f_id == &article.feed_id) {
+			continue;
+		}
+
+		articles.push(article);
+	}
+
+	let order_by = query.order_by.unwrap_or(ArticleOrderBy::Published);
+	let order = query.order.unwrap_or(match &order_by {
+		ArticleOrderBy::Title => Order::Asc,
+		ArticleOrderBy::Published => Order::Desc,
+	});
+
+	match order_by {
+		ArticleOrderBy::Title => articles.sort_by_cached_key(|art| art.title.clone()),
+		ArticleOrderBy::Published => articles.sort_unstable_by_key(|art| art.published),
+	};
+
+	if let Order::Desc = order {
+		articles.reverse();
+	}
+
+	Ok(Json(articles.into_iter().map(|art| art.id).collect()))
 }
